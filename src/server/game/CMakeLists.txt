@@ -12,15 +12,9 @@
 # Initialize a variable to hold Eluna directories to exclude
 set(ELUNA_EXCLUDE_DIRS)
 
-# Exclude files in the LuaEngine directory for Mangos, CMangos and VMangos
+# Exclude files in the LuaEngine directory if Eluna is not active
 # or the entire directory if Eluna is disabled
-if(ELUNA)
-  list(APPEND ELUNA_EXCLUDE_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/LuaEngine/methods/Mangos
-    ${CMAKE_CURRENT_SOURCE_DIR}/LuaEngine/methods/CMangos
-    ${CMAKE_CURRENT_SOURCE_DIR}/LuaEngine/methods/VMangos
-    )
-else()
+if(NOT ELUNA)
   list(APPEND ELUNA_EXCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/LuaEngine
     )
