@@ -3286,6 +3286,10 @@ void Spell::cancel()
     m_spellState = oldState;
 
     finish(false);
+    #ifdef ELUNA
+        if (Eluna* e = m_caster->GetEluna())
+            e->OnSpellCancel(this);
+    #endif
 }
 
 void Spell::cast(bool skipCheck)
@@ -3880,6 +3884,10 @@ void Spell::update(uint32 difftime)
         default:
             break;
     }
+    #ifdef ELUNA
+        if (Eluna* e = m_caster->GetEluna())
+            e->OnSpellUpdate(this, difftime);
+    #endif
 }
 
 void Spell::finish(bool ok)
@@ -3913,6 +3921,11 @@ void Spell::finish(bool ok)
 
     if (Creature* creatureCaster = unitCaster->ToCreature())
         creatureCaster->ReleaseSpellFocus(this);
+
+    #ifdef ELUNA
+        if (Eluna* e = m_caster->GetEluna())
+            e->OnSpellFinish(this, ok);
+    #endif
 
     if (!ok)
         return;

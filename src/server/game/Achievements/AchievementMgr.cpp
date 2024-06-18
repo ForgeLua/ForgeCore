@@ -2236,6 +2236,11 @@ char const* AchievementGlobalMgr::GetCriteriaTypeString(AchievementCriteriaTypes
 
 AchievementCriteriaEntryList const AchievementGlobalMgr::EmptyCriteriaList;
 
+CompletedAchievementMap const& AchievementMgr::GetCompletedAchievements()
+{
+    return m_completedAchievements;
+}
+
 AchievementGlobalMgr* AchievementGlobalMgr::instance()
 {
     static AchievementGlobalMgr instance;

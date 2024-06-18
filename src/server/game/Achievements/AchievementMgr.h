@@ -291,6 +291,7 @@ class TC_GAME_API AchievementMgr
         void UpdateTimedAchievements(uint32 timeDiff);
         void StartTimedAchievement(AchievementCriteriaTimedTypes type, uint32 entry, uint32 timeLost = 0);
         void RemoveTimedAchievement(AchievementCriteriaTimedTypes type, uint32 entry);   // used for quest and scripted timed achievements
+        CompletedAchievementMap const& GetCompletedAchievements();
 
     private:
         void SendAchievementEarned(AchievementEntry const* achievement) const;
