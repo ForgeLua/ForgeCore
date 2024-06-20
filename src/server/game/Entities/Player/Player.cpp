@@ -94,6 +94,7 @@
 #include "TicketMgr.h"
 #include "TradeData.h"
 #include "Trainer.h"
+#include "Transmogrification.h"
 #include "Transport.h"
 #include "UpdateData.h"
 #include "UpdateFieldFlags.h"
@@ -4181,6 +4182,9 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
             stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER);
             stmt->setUInt32(0, guid);
             trans->Append(stmt);
+#ifdef PRESETS
+            trans->PAppend("DELETE FROM `custom_transmogrification_sets` WHERE `Owner` = {}", guid);
+#endif
 
             stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_PLAYER_ACCOUNT_DATA);
             stmt->setUInt32(0, guid);
@@ -7308,6 +7312,21 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
     if (only_level_scale && (!ssd || !ssv))
         return;
 
+    uint32 statcount = proto->StatsCount;
+    ReforgeData* reforgeData = NULL;
+    bool decreased = false;
+    if (statcount < MAX_ITEM_PROTO_STATS)
+    {
+        if (Item* invItem = GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+        {
+            if (reforgeMap.find(invItem->GetGUID().GetCounter()) != reforgeMap.end())
+            {
+                reforgeData = &reforgeMap[invItem->GetGUID().GetCounter()];
+                ++statcount;
+            }
+        }
+    }
+
     for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS; ++i)
     {
         uint32 statType = 0;
@@ -7322,10 +7341,24 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
         }
         else
         {
-            if (i >= proto->StatsCount)
+            if (i >= statcount)
                 continue;
             statType = proto->ItemStat[i].ItemStatType;
             val = proto->ItemStat[i].ItemStatValue;
+
+            if (reforgeData)
+            {
+                if(i == statcount-1)
+                {
+                    statType = reforgeData->increase;
+                    val = reforgeData->stat_value;
+                }
+                else if (!decreased && reforgeData->decrease == statType)
+                {
+                    val -= reforgeData->stat_value;
+                    decreased = true;
+                }
+            }
         }
 
         if (val == 0)
@@ -12243,7 +12276,10 @@ void Player::SetVisibleItemSlot(uint8 slot, Item* pItem)
 {
     if (pItem)
     {
-        SetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2), pItem->GetEntry());
+        if (uint32 entry = pItem->transmog)
+            SetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2), entry);
+        else
+            SetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2), pItem->GetEntry());
         SetUInt16Value(PLAYER_VISIBLE_ITEM_1_ENCHANTMENT + (slot * 2), 0, pItem->GetEnchantmentId(PERM_ENCHANTMENT_SLOT));
         SetUInt16Value(PLAYER_VISIBLE_ITEM_1_ENCHANTMENT + (slot * 2), 1, pItem->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT));
     }
@@ -12372,12 +12408,16 @@ void Player::RemoveItem(uint8 bag, uint8 slot, bool update)
     }
 }
 
+extern void RemoveReforge(Player* player, uint32 itemguid, bool update);
+
 // Common operation need to remove item from inventory without delete in trade, auction, guild bank, mail....
 void Player::MoveItemFromInventory(uint8 bag, uint8 slot, bool update)
 {
     if (Item* it = GetItemByPos(bag, slot))
     {
         RemoveItem(bag, slot, update);
+        RemoveReforge(this, it->GetGUID().GetCounter(), true);
+        it->transmog = 0;
         ItemRemovedQuestCheck(it->GetEntry(), it->GetCount());
         it->SetNotRefundable(this, false);
         RemoveItemFromUpdateQueueOf(it, this);
@@ -14201,8 +14241,8 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId /*= 0*/, bool 
                     break;
                 case GOSSIP_OPTION_VENDOR:
                 {
-                    VendorItemData const* vendorItems = creature->GetVendorItems();
-                    if (!vendorItems || vendorItems->Empty())
+                    VendorItemData const* vendorItems = itr->second.ActionMenuID ? nullptr : creature->GetVendorItems();
+                    if (!itr->second.ActionMenuID && (!vendorItems || vendorItems->Empty()))
                     {
                         TC_LOG_ERROR("sql.sql", "Creature {} ({} DB GUID: {}) has UNIT_NPC_FLAG_VENDOR set, but has an empty trading item list.", creature->GetName(), creature->GetGUID().ToString(), creature->GetSpawnId());
                         canTalk = false;
@@ -14421,7 +14461,7 @@ void Player::OnGossipSelect(WorldObject* source, uint32 gossipListId, uint32 men
             break;
         case GOSSIP_OPTION_VENDOR:
         case GOSSIP_OPTION_ARMORER:
-            GetSession()->SendListInventory(guid);
+            GetSession()->SendListInventory(guid, menuItemData->GossipActionMenuId);
             break;
         case GOSSIP_OPTION_STABLEPET:
             GetSession()->SendStablePet(guid);
@@ -21759,7 +21799,11 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
         return false;
     }
 
-    VendorItemData const* vItems = creature->GetVendorItems();
+    uint32 currentVendor = GetSession()->GetCurrentVendor();
+    if (currentVendor && vendorguid != PlayerTalkClass->GetGossipMenu().GetSenderGUID())
+        return false; // Cheating
+
+    VendorItemData const* vItems = currentVendor ? sObjectMgr->GetNpcVendorItemList(currentVendor) : creature->GetVendorItems();
     if (!vItems || vItems->Empty())
     {
         SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, item, 0);
@@ -23699,7 +23743,10 @@ void Player::AutoUnequipOffhandIfNeed(bool force /*= false*/)
     }
     else
     {
+        uint32 transmog = offItem->transmog;
         MoveItemFromInventory(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND, true);
+        offItem->transmog = transmog;
+
         CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
         offItem->DeleteFromInventoryDB(trans);                   // deletes item from character's inventory
         offItem->SaveToDB(trans);                                // recursive and not have transaction guard into self, item not in inventory and can be save standalone
